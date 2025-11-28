@@ -65,10 +65,10 @@
             margin-right: 8px;
             border-radius: 2px;
         }
-        .color-tog { background-color: #ff9500; }
-        .color-bil { background-color: #e31a1c; }
-        .color-buss { background-color: #1f78b4; }
-        .color-sykkel { background-color: #33a02c; }
+        .color-tog { background-color: #ffa500; }
+        .color-bil { background-color: #ff0000; }
+        .color-buss { background-color: #0000ff; }
+        .color-sykkel { background-color: #00ff00; }
         
         .title-bar {
             position: absolute;
@@ -139,8 +139,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/proj4@2.9.0/dist/proj4.js"></script>
-    <script src="https://unpkg.com/proj4leaflet@1.0.2/src/proj4leaflet.js"></script>
     
     <script>
         // Initialisere kartet sentrert på Asker
@@ -148,63 +146,97 @@
         
         // Grå bakgrunnskart (CartoDB Positron)
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
             subdomains: 'abcd',
             maxZoom: 19
         }).addTo(map);
 
-        // Farger for hver modus
+        // Farger fra QML-filen (RGBA -> hex)
         const modeColors = {
-            'tog': '#ff9500',
-            'bil': '#e31a1c', 
-            'buss': '#1f78b4',
-            'sykkel': '#33a02c'
+            'tog': '#ffa500',    // 255,165,0
+            'bil': '#ff0000',    // 255,0,0
+            'buss': '#0000ff',   // 0,0,255
+            'sykkel': '#00ff00'  // 0,255,0
         };
 
-        // Linjebredde-skalering basert på bredde-attributt
-        function getLineWeight(bredde) {
-            if (!bredde || bredde === 0) return 2;
-            // Skaler bredden - juster disse verdiene etter behov
-            return Math.max(1, Math.min(10, bredde * 10));
-        }
+        // Skala-faktorer fra QML-filen for linjebredde
+        // Mapping mellom Leaflet zoom og QGIS map_scale:
+        // zoom 18 ≈ 1:2000, zoom 16 ≈ 1:8000, zoom 14 ≈ 1:32000, zoom 12 ≈ 1:128000
+        const scaleFactors = {
+            'tog': [
+                { minZoom: 16, factor: 2.4 },    // ~1:5000
+                { minZoom: 14, factor: 4.0 },    // ~1:10000
+                { minZoom: 13, factor: 8.0 },    // ~1:25000
+                { minZoom: 12, factor: 16.0 },   // ~1:50000
+                { minZoom: 11, factor: 40.0 },   // ~1:100000
+                { minZoom: 10, factor: 80.0 },   // ~1:150000
+                { minZoom: 0, factor: 160.0 }    // ~1:250000
+            ],
+            'bil': [
+                { minZoom: 16, factor: 3.6 },
+                { minZoom: 14, factor: 6.0 },
+                { minZoom: 13, factor: 12.0 },
+                { minZoom: 12, factor: 24.0 },
+                { minZoom: 11, factor: 60.0 },
+                { minZoom: 10, factor: 120.0 },
+                { minZoom: 0, factor: 240.0 }
+            ],
+            'buss': [
+                { minZoom: 16, factor: 3.0 },
+                { minZoom: 14, factor: 5.0 },
+                { minZoom: 13, factor: 10.0 },
+                { minZoom: 12, factor: 20.0 },
+                { minZoom: 11, factor: 50.0 },
+                { minZoom: 10, factor: 100.0 },
+                { minZoom: 0, factor: 200.0 }
+            ],
+            'sykkel': [
+                { minZoom: 16, factor: 3.0 },
+                { minZoom: 14, factor: 5.0 },
+                { minZoom: 13, factor: 10.0 },
+                { minZoom: 12, factor: 20.0 },
+                { minZoom: 11, factor: 50.0 },
+                { minZoom: 10, factor: 100.0 },
+                { minZoom: 0, factor: 200.0 }
+            ]
+        };
 
-        // Style-funksjon for GeoJSON
-        function styleFeature(feature) {
-            const mode = feature.properties.mode ? feature.properties.mode.toLowerCase() : 'bil';
-            const bredde = feature.properties.bredde || 0.1;
+        // Beregn linjebredde basert på zoom og bredde-attributt (som i QML)
+        function getLineWeight(mode, bredde, zoom) {
+            const factors = scaleFactors[mode] || scaleFactors['bil'];
+            let factor = factors[factors.length - 1].factor;
             
-            return {
-                color: modeColors[mode] || '#666666',
-                weight: getLineWeight(bredde),
-                opacity: 0.8,
-                lineCap: 'round',
-                lineJoin: 'round'
-            };
-        }
-
-        // Popup for hver feature
-        function onEachFeature(feature, layer) {
-            if (feature.properties) {
-                const props = feature.properties;
-                const mode = props.mode || 'Ukjent';
-                const modeCapitalized = mode.charAt(0).toUpperCase() + mode.slice(1);
-                
-                let popupContent = `<strong>${modeCapitalized}</strong>`;
-                if (props.length) {
-                    popupContent += `<br>Lengde: ${(props.length / 1000).toFixed(2)} km`;
+            for (const scale of factors) {
+                if (zoom >= scale.minZoom) {
+                    factor = scale.factor;
+                    break;
                 }
-                layer.bindPopup(popupContent);
             }
+            
+            // QML-formel: factor * log10(bredde + 1), eller factor * 0.5 hvis bredde <= 0
+            let width;
+            if (bredde && bredde > 0) {
+                width = factor * Math.log10(bredde + 1);
+            } else {
+                width = factor * 0.5;
+            }
+            
+            // Konverter fra QGIS map units til skjerm-piksler
+            // Denne faktoren justerer for forskjellen mellom QGIS og Leaflet
+            const pixelConversion = 0.08;
+            
+            return Math.max(1, Math.min(20, width * pixelConversion));
         }
 
         // Konverter koordinater fra EPSG:3857 til WGS84
         function convertCoordinates(coords) {
             if (typeof coords[0] === 'number') {
-                // Enkelt punkt
-                const result = proj4('EPSG:3857', 'EPSG:4326', coords);
-                return [result[0], result[1]];
+                const x = coords[0];
+                const y = coords[1];
+                const lng = (x * 180) / 20037508.34;
+                const lat = (Math.atan(Math.exp((y * Math.PI) / 20037508.34)) * 360) / Math.PI - 90;
+                return [lng, lat];
             } else {
-                // Array av punkter eller nested arrays
                 return coords.map(c => convertCoordinates(c));
             }
         }
@@ -216,7 +248,6 @@
                     feature.geometry.coordinates = convertCoordinates(feature.geometry.coordinates);
                 }
             });
-            // Fjern CRS-definisjonen siden vi nå bruker WGS84
             delete converted.crs;
             return converted;
         }
@@ -224,13 +255,11 @@
         // Lag-variabler
         let morgenData = null;
         let ettermiddagData = null;
-        let currentLayers = {
-            morgen: {},
-            ettermiddag: {}
-        };
+        let currentLayers = [];
 
-        // Filtrer og vis data
+        // Oppdater kart basert på filtre
         function updateMap() {
+            const zoom = map.getZoom();
             const showMorgen = document.getElementById('toggle-morgen').checked;
             const showEttermiddag = document.getElementById('toggle-ettermiddag').checked;
             const showTog = document.getElementById('toggle-tog').checked;
@@ -245,69 +274,75 @@
             if (showSykkel) activeModes.push('sykkel');
 
             // Fjern eksisterende lag
-            Object.values(currentLayers.morgen).forEach(layer => {
-                if (map.hasLayer(layer)) map.removeLayer(layer);
-            });
-            Object.values(currentLayers.ettermiddag).forEach(layer => {
-                if (map.hasLayer(layer)) map.removeLayer(layer);
-            });
+            currentLayers.forEach(layer => map.removeLayer(layer));
+            currentLayers = [];
 
-            // Legg til morgen-data
-            if (showMorgen && morgenData) {
+            // Funksjon for å legge til data
+            function addData(data, period) {
+                if (!data) return;
+                
                 activeModes.forEach(mode => {
-                    const filteredFeatures = morgenData.features.filter(f => 
+                    const filteredFeatures = data.features.filter(f => 
                         f.properties.mode && f.properties.mode.toLowerCase() === mode
                     );
                     
                     if (filteredFeatures.length > 0) {
-                        const filteredGeoJSON = {
+                        const layer = L.geoJSON({
                             type: 'FeatureCollection',
                             features: filteredFeatures
-                        };
-                        
-                        currentLayers.morgen[mode] = L.geoJSON(filteredGeoJSON, {
-                            style: styleFeature,
-                            onEachFeature: onEachFeature
+                        }, {
+                            style: function(feature) {
+                                const m = feature.properties.mode ? feature.properties.mode.toLowerCase() : 'bil';
+                                const bredde = feature.properties.bredde || 0;
+                                
+                                return {
+                                    color: modeColors[m] || '#666666',
+                                    weight: getLineWeight(m, bredde, zoom),
+                                    opacity: 0.85,
+                                    lineCap: 'round',
+                                    lineJoin: 'round'
+                                };
+                            },
+                            onEachFeature: function(feature, layer) {
+                                if (feature.properties) {
+                                    const props = feature.properties;
+                                    const modeText = (props.mode || 'Ukjent').charAt(0).toUpperCase() + (props.mode || '').slice(1);
+                                    let popup = `<strong>${modeText}</strong><br>Periode: ${period}`;
+                                    if (props.length) {
+                                        popup += `<br>Lengde: ${(props.length / 1000).toFixed(2)} km`;
+                                    }
+                                    if (props.bredde) {
+                                        popup += `<br>Relativ trafikk: ${props.bredde.toFixed(3)}`;
+                                    }
+                                    layer.bindPopup(popup);
+                                }
+                            }
                         }).addTo(map);
+                        
+                        currentLayers.push(layer);
                     }
                 });
             }
 
-            // Legg til ettermiddag-data (når tilgjengelig)
-            if (showEttermiddag && ettermiddagData) {
-                activeModes.forEach(mode => {
-                    const filteredFeatures = ettermiddagData.features.filter(f => 
-                        f.properties.mode && f.properties.mode.toLowerCase() === mode
-                    );
-                    
-                    if (filteredFeatures.length > 0) {
-                        const filteredGeoJSON = {
-                            type: 'FeatureCollection',
-                            features: filteredFeatures
-                        };
-                        
-                        currentLayers.ettermiddag[mode] = L.geoJSON(filteredGeoJSON, {
-                            style: styleFeature,
-                            onEachFeature: onEachFeature
-                        }).addTo(map);
-                    }
-                });
-            }
+            if (showMorgen) addData(morgenData, 'Morgen');
+            if (showEttermiddag) addData(ettermiddagData, 'Ettermiddag');
         }
 
-        // Event listeners for kontroller
+        // Event listeners
         document.querySelectorAll('.control-panel input[type="checkbox"]').forEach(checkbox => {
             checkbox.addEventListener('change', updateMap);
         });
 
-        // Last inn data
+        // Oppdater ved zoom-endring for å justere linjebredde
+        map.on('zoomend', updateMap);
+
+        // Last inn morgen-data
         fetch('data/morgen.geojson')
             .then(response => response.json())
             .then(data => {
                 morgenData = convertGeoJSON(data);
                 updateMap();
                 
-                // Zoom til data-utstrekning
                 const bounds = L.geoJSON(morgenData).getBounds();
                 map.fitBounds(bounds, { padding: [50, 50] });
             })
@@ -315,21 +350,22 @@
                 console.error('Kunne ikke laste morgen-data:', error);
             });
 
-        // Funksjon for å laste ettermiddag-data (kall denne når du har dataene)
-        function loadEttermiddagData() {
-            fetch('data/ettermiddag.geojson')
-                .then(response => response.json())
-                .then(data => {
-                    ettermiddagData = convertGeoJSON(data);
-                    document.getElementById('toggle-ettermiddag').disabled = false;
-                })
-                .catch(error => {
-                    console.log('Ettermiddag-data ikke tilgjengelig ennå');
-                });
-        }
-        
         // Prøv å laste ettermiddag-data
-        loadEttermiddagData();
+        fetch('data/ettermiddag.geojson')
+            .then(response => {
+                if (!response.ok) throw new Error('Ikke funnet');
+                return response.json();
+            })
+            .then(data => {
+                ettermiddagData = convertGeoJSON(data);
+                document.getElementById('toggle-ettermiddag').disabled = false;
+                const label = document.getElementById('toggle-ettermiddag').parentElement;
+                label.innerHTML = '<input type="checkbox" id="toggle-ettermiddag"> Ettermiddag';
+                document.getElementById('toggle-ettermiddag').addEventListener('change', updateMap);
+            })
+            .catch(() => {
+                console.log('Ettermiddag-data ikke tilgjengelig ennå');
+            });
     </script>
 </body>
 </html>
